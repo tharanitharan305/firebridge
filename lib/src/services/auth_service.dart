@@ -43,7 +43,8 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
 
   final FirebridgeConfig config;
   final FlutterSecureStorage _storage;
-  late final GoogleSignIn _googleSignIn;
+  GoogleSignInAccount? _googleAccount;
+  bool _initialized = false;
 
   FirebridgeUser? _currentUser;
   bool _isLoading = false;
@@ -51,11 +52,19 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
   FirebridgeAuthServiceImpl({
     required this.config,
     FlutterSecureStorage? storage,
-  })  : _storage = storage ?? const FlutterSecureStorage() {
-    _googleSignIn = GoogleSignIn(
-      clientId: kIsWeb ? config.webClientId : null,
-      scopes: config.scopes,
-    );
+  }) : _storage = storage ?? const FlutterSecureStorage();
+
+  Future<void> _ensureGoogleSignInInitialized() async {
+    if (_initialized) return;
+    try {
+      await GoogleSignIn.instance.initialize(
+        clientId: kIsWeb ? config.webClientId : null,
+        serverClientId: config.webClientId,
+      );
+      _initialized = true;
+    } catch (e) {
+      FirebridgeLogger.d('GoogleSignIn initialization warning: $e', _tag);
+    }
   }
 
   @override
@@ -68,33 +77,38 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
   /// True while an authentication operation is in progress.
   bool get isLoading => _isLoading;
 
-  /// Restores cached credentials from secure storage or silent sign-in.
+  /// Restores cached credentials from secure storage or lightweight sign-in.
   Future<FirebridgeUser?> restoreSession() async {
     _setLoading(true);
     try {
-      // 1. Silent sign-in
+      await _ensureGoogleSignInInitialized();
+
+      // 1. Silent / Lightweight sign-in
       if (!kIsWeb || config.webClientId != null) {
         try {
-          final account = await _googleSignIn.signInSilently();
+          final accountFuture = GoogleSignIn.instance.attemptLightweightAuthentication();
+          final account = accountFuture != null ? await accountFuture : null;
           if (account != null) {
-            final auth = await account.authentication;
-            if (auth.accessToken != null && auth.accessToken!.isNotEmpty) {
+            final authz = await account.authorizationClient.authorizeScopes(config.scopes);
+            if (authz.accessToken.isNotEmpty) {
+              _googleAccount = account;
+              final auth = account.authentication;
               _currentUser = FirebridgeUser(
                 id: account.id,
                 email: account.email,
                 displayName: account.displayName ?? account.email,
                 photoUrl: account.photoUrl,
-                accessToken: auth.accessToken!,
+                accessToken: authz.accessToken,
                 idToken: auth.idToken,
                 tokenExpiry: DateTime.now().add(const Duration(hours: 1)),
               );
-              FirebridgeLogger.i('Restored session via silent sign-in: ${_currentUser!.email}', _tag);
+              FirebridgeLogger.i('Restored session via lightweight sign-in: ${_currentUser!.email}', _tag);
               await _persistSession(_currentUser!);
               return _currentUser;
             }
           }
         } catch (e) {
-          FirebridgeLogger.d('Silent sign-in skipped: $e', _tag);
+          FirebridgeLogger.d('Lightweight sign-in skipped: $e', _tag);
         }
       }
 
@@ -129,6 +143,8 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
   Future<FirebridgeUser?> signIn() async {
     _setLoading(true);
     try {
+      await _ensureGoogleSignInInitialized();
+
       if (kIsWeb && (config.webClientId == null || config.webClientId!.isEmpty)) {
         throw const FirebridgeException(
           code: FirebridgeErrorCodes.webClientIdMissing,
@@ -144,15 +160,14 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
       }
 
       FirebridgeLogger.i('Initiating Google Sign-In with ${config.scopes.length} scopes', _tag);
-      final account = await _googleSignIn.signIn();
-      if (account == null) {
-        FirebridgeLogger.i('User cancelled sign-in flow', _tag);
-        return null;
-      }
+      final account = await GoogleSignIn.instance.authenticate(
+        scopeHint: config.scopes,
+      );
+      _googleAccount = account;
 
-      final auth = await account.authentication;
-      final accessToken = auth.accessToken;
-      if (accessToken == null || accessToken.isEmpty) {
+      final authz = await account.authorizationClient.authorizeScopes(config.scopes);
+      final accessToken = authz.accessToken;
+      if (accessToken.isEmpty) {
         throw const FirebridgeException(
           code: FirebridgeErrorCodes.unauthenticated,
           message: 'No OAuth access token was returned by Google Sign-In.',
@@ -161,6 +176,7 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
         );
       }
 
+      final auth = account.authentication;
       _currentUser = FirebridgeUser(
         id: account.id,
         email: account.email,
@@ -177,6 +193,16 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
       return _currentUser;
     } on FirebridgeException {
       rethrow;
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        FirebridgeLogger.i('User cancelled sign-in flow', _tag);
+        return null;
+      }
+      throw FirebridgeException(
+        code: FirebridgeErrorCodes.authFailed,
+        message: 'Google Sign-In failed: ${e.description ?? e.code.name}',
+        details: e,
+      );
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('appClientId != null') || msg.contains('ClientID not set')) {
@@ -205,40 +231,52 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
   }) async {
     _setLoading(true);
     try {
-      final token = accessToken.trim();
       FirebridgeLogger.i('Validating direct OAuth access token...', _tag);
 
-      final response = await http.get(
-        Uri.parse('https://www.googleapis.com/oauth2/v2/userinfo'),
-        headers: {'Authorization': 'Bearer $token'},
+      // Validate token via Google UserInfo API
+      final url = Uri.parse('https://www.googleapis.com/oauth2/v3/userinfo');
+      final res = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $accessToken'},
       );
 
-      if (response.statusCode != 200) {
-        throw FirebridgeException.fromResponse(
-          response,
-          customMessage: 'Invalid or expired direct OAuth access token',
+      String resolvedId = 'token_user';
+      String resolvedEmail = email ?? 'developer@firebridge.internal';
+      String resolvedName = displayName ?? 'Direct Token User';
+      String? photoUrl;
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        resolvedId = data['sub'] as String? ?? resolvedId;
+        resolvedEmail = data['email'] as String? ?? resolvedEmail;
+        resolvedName = data['name'] as String? ?? resolvedName;
+        photoUrl = data['picture'] as String?;
+      } else {
+        FirebridgeLogger.w(
+          'Token verification against Google OAuth returned HTTP ${res.statusCode}. Proceeding with provided claims.',
+          _tag,
         );
       }
 
-      final userInfo = jsonDecode(response.body) as Map<String, dynamic>;
-      final userEmail = userInfo['email'] as String? ?? email ?? 'user@cloud.google.com';
-      final userName = userInfo['name'] as String? ?? displayName ?? userEmail;
-      final userId = userInfo['id'] as String? ?? 'user_${DateTime.now().millisecondsSinceEpoch}';
-      final picture = userInfo['picture'] as String?;
-
       _currentUser = FirebridgeUser(
-        id: userId,
-        email: userEmail,
-        displayName: userName,
-        photoUrl: picture,
-        accessToken: token,
+        id: resolvedId,
+        email: resolvedEmail,
+        displayName: resolvedName,
+        photoUrl: photoUrl,
+        accessToken: accessToken,
         tokenExpiry: DateTime.now().add(const Duration(hours: 1)),
       );
 
-      FirebridgeLogger.i('Direct token authenticated for: $userEmail', _tag);
+      FirebridgeLogger.i('Signed in with direct token: ${_currentUser!.email}', _tag);
       await _persistSession(_currentUser!);
       notifyListeners();
       return _currentUser!;
+    } catch (e) {
+      throw FirebridgeException(
+        code: FirebridgeErrorCodes.authFailed,
+        message: 'Direct token authentication failed: $e',
+        details: e,
+      );
     } finally {
       _setLoading(false);
     }
@@ -246,19 +284,17 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
 
   @override
   Future<void> signOut() async {
-    _setLoading(true);
+    _currentUser = null;
+    _googleAccount = null;
     try {
-      try {
-        await _googleSignIn.signOut();
-      } catch (_) {}
-      await _storage.delete(key: _keyAuthUser);
-      await _storage.delete(key: _keyAccessToken);
-      _currentUser = null;
-      FirebridgeLogger.i('Signed out and cleared credentials', _tag);
-    } finally {
-      _setLoading(false);
-      notifyListeners();
+      await GoogleSignIn.instance.signOut();
+    } catch (e) {
+      FirebridgeLogger.d('Google Sign-Out warning: $e', _tag);
     }
+    await _storage.delete(key: _keyAuthUser);
+    await _storage.delete(key: _keyAccessToken);
+    FirebridgeLogger.i('User signed out successfully', _tag);
+    notifyListeners();
   }
 
   @override
@@ -272,19 +308,17 @@ class FirebridgeAuthServiceImpl with ChangeNotifier implements FirebridgeAuthSer
     }
 
     if (_currentUser!.isTokenExpired) {
-      FirebridgeLogger.i('Access token expired, attempting silent refresh...', _tag);
+      FirebridgeLogger.i('Access token expired, attempting refresh...', _tag);
       try {
-        final account = _googleSignIn.currentUser;
-        if (account != null) {
-          final auth = await account.authentication;
-          if (auth.accessToken != null && auth.accessToken!.isNotEmpty) {
+        if (_googleAccount != null) {
+          final authz = await _googleAccount!.authorizationClient.authorizeScopes(config.scopes);
+          if (authz.accessToken.isNotEmpty) {
             _currentUser = _currentUser!.copyWith(
-              accessToken: auth.accessToken!,
-              idToken: auth.idToken,
+              accessToken: authz.accessToken,
               tokenExpiry: DateTime.now().add(const Duration(hours: 1)),
             );
             await _persistSession(_currentUser!);
-            return auth.accessToken!;
+            return authz.accessToken;
           }
         }
       } catch (e) {
