@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:firebridge/firebridge.dart';
+import 'package:firebridge_flutter/firebridge.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:firebridge/src/core/config.dart';
-import 'package:firebridge/src/core/logger.dart';
-import 'package:firebridge/src/core/errors.dart';
+import 'package:firebridge_flutter/src/core/config.dart';
+import 'package:firebridge_flutter/src/core/logger.dart';
+import 'package:firebridge_flutter/src/core/errors.dart';
 
 void main() {
   group('FirebridgeConfig tests', () {

@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:firebridge/src/core/errors.dart';
-import 'package:firebridge/src/services/firestore_client.dart';
+import 'package:firebridge_flutter/src/core/errors.dart';
+import 'package:firebridge_flutter/src/services/firestore_client.dart';
 
 void main() {
   Future<String> getMockToken() async => 'mock-firestore-token';

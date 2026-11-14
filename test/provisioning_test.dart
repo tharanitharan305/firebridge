@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:firebridge/src/core/errors.dart';
-import 'package:firebridge/src/services/crm_service.dart';
-import 'package:firebridge/src/services/service_usage_service.dart';
-import 'package:firebridge/src/services/firebase_mgmt_service.dart';
-import 'package:firebridge/src/services/firestore_admin_service.dart';
-import 'package:firebridge/src/services/provisioning_engine.dart';
+import 'package:firebridge_flutter/src/core/errors.dart';
+import 'package:firebridge_flutter/src/services/crm_service.dart';
+import 'package:firebridge_flutter/src/services/service_usage_service.dart';
+import 'package:firebridge_flutter/src/services/firebase_mgmt_service.dart';
+import 'package:firebridge_flutter/src/services/firestore_admin_service.dart';
+import 'package:firebridge_flutter/src/services/provisioning_engine.dart';
 
 void main() {
   Future<String> getMockToken() async => 'mock-token';

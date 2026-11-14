@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:firebridge/src/models/user.dart';
-import 'package:firebridge/src/models/project.dart';
-import 'package:firebridge/src/models/document.dart';
+import 'package:firebridge_flutter/src/models/user.dart';
+import 'package:firebridge_flutter/src/models/project.dart';
+import 'package:firebridge_flutter/src/models/document.dart';
 
 void main() {
   group('FirebridgeUser Tests', () {
