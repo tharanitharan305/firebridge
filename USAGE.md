@@ -212,3 +212,4 @@ try {
 ```
 
 For a complete directory of error codes and resolution steps, refer to [ERRORS.md](ERRORS.md).
+

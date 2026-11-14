@@ -7,7 +7,7 @@ void main() async {
   // Initialize Firebridge BYOC Client
   await Firebridge.initialize(
     enableLogging: true,
-    webClientId: '1027184333516-m3vvd76v3d7195p22q8600qllksu47v4.apps.googleusercontent.com',
+    webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
     defaultRegion: 'nam5',
   );
 
