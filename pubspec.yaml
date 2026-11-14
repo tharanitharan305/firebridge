@@ -1,6 +1,6 @@
 name: firebridge_flutter
 description: "Bring-Your-Own-Cloud (BYOC) infrastructure client for Flutter, connecting users directly to their own Google Cloud and Cloud Firestore instances."
-version: 0.0.1
+version: 0.0.2
 homepage: https://github.com/tharanitharan305/firebridge
 repository: https://github.com/tharanitharan305/firebridge
 issue_tracker: https://github.com/tharanitharan305/firebridge/issues
